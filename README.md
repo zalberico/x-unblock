@@ -54,9 +54,6 @@ You can stop the script at any time with Ctrl+C.
 
 If your computer restarts or the script stops, just run it again and it will continue where it left off.
 
-If you see rate limit errors:
-This is expected - the script will wait the required time and continue
-
 Run the script with:
 ```
 node unblock.js

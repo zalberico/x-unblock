@@ -21,60 +21,106 @@ const client = new TwitterApi({
   accessSecret: ACCESS_TOKEN_SECRET,
 });
 
+// File to store our progress
+const SAVE_FILE = 'unblock_progress.json';
+
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function loadSavedProgress() {
+  try {
+    if (await fs.pathExists(SAVE_FILE)) {
+      const data = await fs.readJson(SAVE_FILE);
+      console.log(`Loaded saved progress with ${data.blockedUsers.length} users, ${Object.keys(data.unblocked).length} already unblocked`);
+      return data;
+    }
+  } catch (error) {
+    console.error('Error loading saved progress:', error);
+  }
+  return { blockedUsers: [], unblocked: {} };
+}
+
+async function saveProgress(blockedUsers, unblocked) {
+  try {
+    await fs.writeJson(SAVE_FILE, { blockedUsers, unblocked });
+    console.log('Progress saved');
+  } catch (error) {
+    console.error('Error saving progress:', error);
+  }
+}
+
 async function unblockAllUsers() {
   try {
-    let blockedUsers = [];
-    let paginationToken = null;
-    // X API rate limits: Free=1, Basic=5, Pro=15 requests per 15 mins
-    // Defaulting to Free tier limit to be conservative
-    const BATCH_SIZE = 1;
-    
-    // First, get all blocked users
-    console.log('Attempting to authenticate...'); // Immediate feedback
+    // First, authenticate and get user info
+    console.log('Attempting to authenticate...');
     const me = await client.v2.me();
     console.log('Successfully authenticated as:', {
       username: me.data.username,
       name: me.data.name,
       id: me.data.id
     });
+
+    // Load any saved progress
+    const { blockedUsers, unblocked } = await loadSavedProgress();
     
-    do {
-      console.log('Fetching batch of blocked users...');
+    // If we don't have blocked users saved, fetch them
+    if (blockedUsers.length === 0) {
+      console.log('No saved list found. Fetching blocked users...');
+      let paginationToken = null;
+      // X API rate limits: Free=1, Basic=5, Pro=15 requests per 15 mins
+      // Defaulting to Free tier limit to be conservative
+      const BATCH_SIZE = 1;
       
-      const endpoint = `users/${me.data.id}/blocking`;
-      const params = {
-        "max_results": BATCH_SIZE,
-        ...(paginationToken && { "pagination_token": paginationToken })
-      };
+      do {
+        console.log('Fetching batch of blocked users...');
+        
+        const endpoint = `users/${me.data.id}/blocking`;
+        const params = {
+          "max_results": BATCH_SIZE,
+          ...(paginationToken && { "pagination_token": paginationToken })
+        };
+        
+        const response = await client.v2.get(endpoint, params);
+        
+        if (response?.data && Array.isArray(response.data)) {
+          blockedUsers.push(...response.data);
+          console.log(`Found ${response.data.length} users in this batch. Total: ${blockedUsers.length}`);
+          
+          // Save progress after each batch
+          await saveProgress(blockedUsers, unblocked);
+        }
+        
+        paginationToken = response?.meta?.next_token;
+        
+        // Respect rate limits - wait 15 minutes between requests
+        if (paginationToken) {
+          console.log('Waiting 15 minutes before next request...');
+          await sleep(15 * 60 * 1000);
+        }
+        
+      } while (paginationToken);
       
-      const response = await client.v2.get(endpoint, params);
-      
-      if (response?.data && Array.isArray(response.data)) {
-        blockedUsers = blockedUsers.concat(response.data);
-        console.log(`Found ${response.data.length} users in this batch. Total: ${blockedUsers.length}`);
+      console.log(`Completed fetching blocked users. Total: ${blockedUsers.length}`);
+      await saveProgress(blockedUsers, unblocked);
+    }
+    
+    // Now unblock users
+    console.log(`Starting unblock process for ${blockedUsers.length} users...`);
+    for (const user of blockedUsers) {
+      // Skip if already unblocked
+      if (unblocked[user.id]) {
+        continue;
       }
-      
-      paginationToken = response?.meta?.next_token;
-      
-      // Respect rate limits - wait 15 minutes between requests
-      console.log('Waiting 15 minutes before next request...');
-      await sleep(15 * 60 * 1000);
-      
-    } while (paginationToken);
-    
-    console.log(`Found ${blockedUsers.length} blocked users total`);
-    
-    // Now unblock them in batches
-    for (let i = 0; i < blockedUsers.length; i++) {
-      const user = blockedUsers[i];
+
       try {
         const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
         await client.v2.delete(unblockEndpoint);
-        console.log(`Unblocked user: ${user.username || user.id} (${i + 1}/${blockedUsers.length})`);
+        console.log(`Unblocked user: ${user.username || user.id} (${Object.keys(unblocked).length + 1}/${blockedUsers.length})`);
+        
+        // Mark as unblocked and save progress
+        unblocked[user.id] = true;
+        await saveProgress(blockedUsers, unblocked);
         
         // Wait 15 minutes between each unblock
         console.log('Waiting 15 minutes before next unblock...');
