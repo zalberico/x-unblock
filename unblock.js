@@ -95,14 +95,22 @@ async function unblockAllUsers() {
       if (response?.data && Array.isArray(response.data)) {
         // Process each user in the batch (should be just one user on free tier)
         for (const user of response.data) {
-          if (!unblocked[user.id]) {
+          console.log('\nFetched user:');
+          console.log('- ID:', user.id);
+          console.log('- Username:', user.username);
+          console.log('- Name:', user.name);
+          
+          if (!progress.processedUsers[user.id]) {
             try {
               const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
               await client.v2.delete(unblockEndpoint);
-              unblocked[user.id] = true;
-              totalProcessed++;
-              console.log(`Unblocked user: ${user.username || user.id}`);
-              console.log(`Total processed: ${totalProcessed} users`);
+              progress.processedUsers[user.id] = true;
+              
+              console.log('\nSuccessfully unblocked:');
+              console.log('- ID:', user.id);
+              console.log('- Username:', user.username);
+              console.log('- Name:', user.name);
+              console.log(`Total processed: ${Object.keys(progress.processedUsers).length} users`);
               
               // Save progress
               paginationToken = response?.meta?.next_token;
