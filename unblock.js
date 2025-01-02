@@ -26,6 +26,10 @@ const client = new TwitterApi({
 // File to store our progress
 const SAVE_FILE = 'unblock_progress.json';
 
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function handleRateLimit(error) {
   if (error.rateLimit?.reset) {
     const now = Math.floor(Date.now() / 1000);
