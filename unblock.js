@@ -29,7 +29,9 @@ async function unblockAllUsers() {
   try {
     let blockedUsers = [];
     let paginationToken = null;
-    const BATCH_SIZE = 100; // Adjust based on rate limits
+    // X API rate limits: Free=1, Basic=5, Pro=15 requests per 15 mins
+    // Defaulting to Free tier limit to be conservative
+    const BATCH_SIZE = 1;
     
     // First, get all blocked users
     console.log('Attempting to authenticate...'); // Immediate feedback
