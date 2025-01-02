@@ -26,8 +26,31 @@ const client = new TwitterApi({
 // File to store our progress
 const SAVE_FILE = 'unblock_progress.json';
 
-async function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function handleRateLimit(error) {
+  if (error.rateLimit?.reset) {
+    const now = Math.floor(Date.now() / 1000);
+    const waitSeconds = error.rateLimit.reset - now + 1; // Add 1 second buffer
+    if (waitSeconds > 0) {
+      console.log(`Rate limit hit. Waiting ${waitSeconds} seconds until reset...`);
+      await sleep(waitSeconds * 1000);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function makeRequest(requestFn) {
+  try {
+    return await requestFn();
+  } catch (error) {
+    if (error.code === 429) { // Rate limit error
+      if (await handleRateLimit(error)) {
+        // Retry the request after waiting
+        return await requestFn();
+      }
+    }
+    throw error;
+  }
 }
 
 async function loadSavedProgress() {
@@ -39,6 +62,14 @@ async function loadSavedProgress() {
       if (data.paginationToken) {
         console.log('- Found saved position in list');
       }
+      if (data.lastRequestTime) {
+        const msSinceLastRequest = Date.now() - data.lastRequestTime;
+        const minutesRemaining = Math.max(0, 15 - (msSinceLastRequest / 60000));
+        if (minutesRemaining > 0) {
+          console.log(`Need to wait ${minutesRemaining.toFixed(1)} minutes before next request`);
+          await sleep(minutesRemaining * 60000);
+        }
+      }
       return data;
     }
   } catch (error) {
@@ -46,12 +77,14 @@ async function loadSavedProgress() {
   }
   return { 
     processedUsers: {}, // Track which users we've handled
-    paginationToken: null // Remember where we are in the list
+    paginationToken: null, // Remember where we are in the list
+    lastRequestTime: 0 // Track when we last made a request
   };
 }
 
 async function saveProgress(progress) {
   try {
+    progress.lastRequestTime = Date.now();
     await fs.writeJson(SAVE_FILE, progress);
     console.log('Progress saved to unblock_progress.json');
   } catch (error) {
@@ -90,7 +123,7 @@ async function unblockAllUsers() {
         ...(paginationToken && { "pagination_token": paginationToken })
       };
       
-      const response = await client.v2.get(endpoint, params);
+      const response = await makeRequest(() => client.v2.get(endpoint, params));
       
       if (response?.data && Array.isArray(response.data)) {
         // Process each user in the batch (should be just one user on free tier)
@@ -103,7 +136,7 @@ async function unblockAllUsers() {
           if (!progress.processedUsers[user.id]) {
             try {
               const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
-              await client.v2.delete(unblockEndpoint);
+              await makeRequest(() => client.v2.delete(unblockEndpoint));
               progress.processedUsers[user.id] = true;
               
               console.log('\nSuccessfully unblocked:');
