@@ -29,24 +29,24 @@ const ACCESS_TOKEN_SECRET = 'your_access_token_secret';
 
 This code (written with the help of Claude) automates the unblock process for you with some significant caveats.
 
-The current X rate limits for this endpoint are fairly extreme:
+The current X rate limits for this endpoint are fairly extreme and apply to both getting the blocked user *and* doing the unblock:
 
 - Pro: 15 requests per 15 minutes per user
 - Basic: 5 requests per 15 minutes per user
 - Free: 1 request per 15 minutes per user
 
-This means if you have 50k users blocked you're looking at the following timelines:
+For each user you first need to fetch that user and the unblock them (2 requests).
+
+This means if you have 50k users blocked you're looking at the following timelines to fetch *and* to then unblock at each tier:
 
 Free Tier (1 request/15 mins):
-- 50,000 users ÷ (1 request / 15 mins) = 750,000 minutes = ~521 days 😱
+- 50,000 users ÷ (1 request / 15 mins) = 750,000 minutes = ~521 days 😱 * 2 = ~1,042 days (2.85 years)
 
 Basic Tier ($200/month, 5 requests/15 mins):
-- 50,000 users ÷ (5 requests / 15 mins) = 150,000 minutes = ~104 days
+- 50,000 users ÷ (5 requests / 15 mins) = 150,000 minutes = ~104 days * 2 = ~208 days (6.9 months)
 
 Pro Tier ($5000/month, 15 requests/15 mins):
-- 50,000 users ÷ (15 requests / 15 mins) = 50,000 minutes = ~35 days
-
-The script will run for a very long time depending on your tier.
+- 50,000 users ÷ (15 requests / 15 mins) = 50,000 minutes = ~35 days * 2 = ~70 days (2.3 months)
 
 The script will show progress in the console as it runs.
 

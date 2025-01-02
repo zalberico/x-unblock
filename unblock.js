@@ -4,15 +4,13 @@
 import { TwitterApi } from 'twitter-api-v2';
 import fs from 'fs-extra';
 
-console.log('Script starting...'); // Immediate feedback
+console.log('Script starting...');
 
 // Replace these with your API credentials from the X Developer Portal
 const API_KEY = 'your_api_key';
 const API_KEY_SECRET = 'your_api_key_secret';
 const ACCESS_TOKEN = 'your_access_token';
 const ACCESS_TOKEN_SECRET = 'your_access_token_secret';
-
-console.log('Initializing Twitter API client...'); // Immediate feedback
 
 const client = new TwitterApi({
   appKey: API_KEY,
@@ -32,19 +30,26 @@ async function loadSavedProgress() {
   try {
     if (await fs.pathExists(SAVE_FILE)) {
       const data = await fs.readJson(SAVE_FILE);
-      console.log(`Loaded saved progress with ${data.blockedUsers.length} users, ${Object.keys(data.unblocked).length} already unblocked`);
+      console.log(`Loaded saved progress:`);
+      console.log(`- Processed ${Object.keys(data.processedUsers).length} users`);
+      if (data.paginationToken) {
+        console.log('- Found saved position in list');
+      }
       return data;
     }
   } catch (error) {
     console.error('Error loading saved progress:', error);
   }
-  return { blockedUsers: [], unblocked: {} };
+  return { 
+    processedUsers: {}, // Track which users we've handled
+    paginationToken: null // Remember where we are in the list
+  };
 }
 
-async function saveProgress(blockedUsers, unblocked) {
+async function saveProgress(progress) {
   try {
-    await fs.writeJson(SAVE_FILE, { blockedUsers, unblocked });
-    console.log('Progress saved');
+    await fs.writeJson(SAVE_FILE, progress);
+    console.log('Progress saved to unblock_progress.json');
   } catch (error) {
     console.error('Error saving progress:', error);
   }
@@ -52,8 +57,12 @@ async function saveProgress(blockedUsers, unblocked) {
 
 async function unblockAllUsers() {
   try {
-    // First, authenticate and get user info
-    console.log('Attempting to authenticate...');
+    // Load any saved progress
+    const progress = await loadSavedProgress();
+    let { unblocked, paginationToken, totalProcessed } = progress;
+    
+    // First, authenticate
+    console.log('\nAuthenticating with X...');
     const me = await client.v2.me();
     console.log('Successfully authenticated as:', {
       username: me.data.username,
@@ -61,78 +70,62 @@ async function unblockAllUsers() {
       id: me.data.id
     });
 
-    // Load any saved progress
-    const { blockedUsers, unblocked } = await loadSavedProgress();
+    // X API rate limits: Free=1, Basic=5, Pro=15 requests per 15 mins
+    const BATCH_SIZE = 1;  // Free tier limit
     
-    // If we don't have blocked users saved, fetch them
-    if (blockedUsers.length === 0) {
-      console.log('No saved list found. Fetching blocked users...');
-      let paginationToken = null;
-      // X API rate limits: Free=1, Basic=5, Pro=15 requests per 15 mins
-      // Defaulting to Free tier limit to be conservative
-      const BATCH_SIZE = 1;
-      
-      do {
-        console.log('Fetching batch of blocked users...');
-        
-        const endpoint = `users/${me.data.id}/blocking`;
-        const params = {
-          "max_results": BATCH_SIZE,
-          ...(paginationToken && { "pagination_token": paginationToken })
-        };
-        
-        const response = await client.v2.get(endpoint, params);
-        
-        if (response?.data && Array.isArray(response.data)) {
-          blockedUsers.push(...response.data);
-          console.log(`Found ${response.data.length} users in this batch. Total: ${blockedUsers.length}`);
-          
-          // Save progress after each batch
-          await saveProgress(blockedUsers, unblocked);
-        }
-        
-        paginationToken = response?.meta?.next_token;
-        
-        // Respect rate limits - wait 15 minutes between requests
-        if (paginationToken) {
-          console.log('Waiting 15 minutes before next request...');
-          await sleep(15 * 60 * 1000);
-        }
-        
-      } while (paginationToken);
-      
-      console.log(`Completed fetching blocked users. Total: ${blockedUsers.length}`);
-      await saveProgress(blockedUsers, unblocked);
-    }
+    console.log('\n=== PROCESSING BLOCKED USERS ===');
+    console.log('Fetching and unblocking users one at a time...\n');
     
-    // Now unblock users
-    console.log(`Starting unblock process for ${blockedUsers.length} users...`);
-    for (const user of blockedUsers) {
-      // Skip if already unblocked
-      if (unblocked[user.id]) {
-        continue;
+    do {
+      // Fetch next batch of blocked users
+      console.log('Fetching next blocked user...');
+      
+      const endpoint = `users/${me.data.id}/blocking`;
+      const params = {
+        "max_results": BATCH_SIZE,
+        ...(paginationToken && { "pagination_token": paginationToken })
+      };
+      
+      const response = await client.v2.get(endpoint, params);
+      
+      if (response?.data && Array.isArray(response.data)) {
+        // Process each user in the batch (should be just one user on free tier)
+        for (const user of response.data) {
+          if (!unblocked[user.id]) {
+            try {
+              const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
+              await client.v2.delete(unblockEndpoint);
+              unblocked[user.id] = true;
+              totalProcessed++;
+              console.log(`Unblocked user: ${user.username || user.id}`);
+              console.log(`Total processed: ${totalProcessed} users`);
+              
+              // Save progress
+              paginationToken = response?.meta?.next_token;
+              await saveProgress({ unblocked, paginationToken, totalProcessed });
+            } catch (error) {
+              console.error(`Failed to unblock user ${user.username || user.id}:`, error);
+              // Continue with next user even if one fails
+            }
+          }
+        }
       }
-
-      try {
-        const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
-        await client.v2.delete(unblockEndpoint);
-        console.log(`Unblocked user: ${user.username || user.id} (${Object.keys(unblocked).length + 1}/${blockedUsers.length})`);
-        
-        // Mark as unblocked and save progress
-        unblocked[user.id] = true;
-        await saveProgress(blockedUsers, unblocked);
-        
-        // Wait 15 minutes between each unblock
-        console.log('Waiting 15 minutes before next unblock...');
+      
+      paginationToken = response?.meta?.next_token;
+      
+      // Wait 15 minutes before next request (covers both the fetch and unblock)
+      if (paginationToken) {
+        console.log('\nWaiting 15 minutes before next user (X API rate limit)...\n');
         await sleep(15 * 60 * 1000);
-      } catch (error) {
-        console.error(`Failed to unblock user ${user.username || user.id}:`, error);
-        // Continue with next user even if one fails
-        continue;
       }
-    }
+      
+    } while (paginationToken);
     
-    console.log('Finished unblocking process!');
+    console.log('\n=== PROCESS COMPLETE! ===');
+    console.log(`Successfully processed ${totalProcessed} users`);
+    
+    // Clean up save file since we're done
+    await fs.remove(SAVE_FILE);
     
   } catch (error) {
     console.error('An error occurred:', error);
@@ -143,7 +136,15 @@ async function unblockAllUsers() {
 }
 
 // Run the script
-console.log('Starting unblock process...'); // Immediate feedback
+console.log('\n=== X MASS UNBLOCK SCRIPT ===');
+console.log('This script fetches and unblocks users one at a time.');
+console.log('Each user requires two API calls (fetch + unblock).');
+console.log('With the free API tier limit of 1 request per 15 minutes:');
+console.log('- Processing 50k users will take ~1,042 days total');
+console.log('- You will unblock ~48 users per day (2 requests per user)');
+console.log('- Progress is immediate - no need to wait for full list');
+console.log('Progress is saved so you can stop/restart anytime.\n');
+
 unblockAllUsers().catch(error => {
   console.error('Unhandled error:', error);
 });
