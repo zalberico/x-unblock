@@ -16,16 +16,12 @@ You'll need an X developer account as a prerequisite:
      - Access Token
      - Access Token Secret
 
-Clone this repo and install the required packages:
-- npm install
-
-Add your credentials to the script:
-```
-const API_KEY = 'your_api_key';
-const API_KEY_SECRET = 'your_api_key_secret';
-const ACCESS_TOKEN = 'your_access_token';
-const ACCESS_TOKEN_SECRET = 'your_access_token_secret';
-```
+## Setup
+1. Clone this repository
+2. Install dependencies: `npm install`
+3. Copy config.example.json to config.json
+4. Edit config.json with your X API credentials
+5. Run the script: `node unblock.js`
 
 This code (written with the help of Claude) automates the unblock process for you with some significant caveats.
 
@@ -53,8 +49,3 @@ The script will show progress in the console as it runs.
 You can stop the script at any time with Ctrl+C.
 
 If your computer restarts or the script stops, just run it again and it will continue where it left off.
-
-Run the script with:
-```
-node unblock.js
-```

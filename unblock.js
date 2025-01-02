@@ -6,17 +6,21 @@ import fs from 'fs-extra';
 
 console.log('Script starting...');
 
-// Replace these with your API credentials from the X Developer Portal
-const API_KEY = 'your_api_key';
-const API_KEY_SECRET = 'your_api_key_secret';
-const ACCESS_TOKEN = 'your_access_token';
-const ACCESS_TOKEN_SECRET = 'your_access_token_secret';
+// Load config
+let config;
+try {
+  config = await fs.readJson('config.json');
+} catch (error) {
+  console.error('Error: Could not find config.json');
+  console.error('Please copy config.example.json to config.json and add your API credentials');
+  process.exit(1);
+}
 
 const client = new TwitterApi({
-  appKey: API_KEY,
-  appSecret: API_KEY_SECRET,
-  accessToken: ACCESS_TOKEN,
-  accessSecret: ACCESS_TOKEN_SECRET,
+  appKey: config.API_KEY,
+  appSecret: config.API_KEY_SECRET,
+  accessToken: config.ACCESS_TOKEN,
+  accessSecret: config.ACCESS_TOKEN_SECRET,
 });
 
 // File to store our progress
