@@ -27,7 +27,16 @@ const client = new TwitterApi({
 const SAVE_FILE = 'unblock_progress.json';
 
 async function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  const start = Date.now();
+  const end = start + ms;
+  
+  while (Date.now() < end) {
+    const remaining = Math.ceil((end - Date.now()) / 1000);
+    if (remaining % 60 === 0) { // Update every minute
+      console.log(`${Math.floor(remaining / 60)} minutes remaining...`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Check every second
+  }
 }
 
 async function loadSavedProgress() {
