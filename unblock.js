@@ -105,8 +105,16 @@ async function unblockAllUsers() {
         };
         
         console.log('Making API request...');
-        const response = await client.v2.get(endpoint, params);
-        console.log('API Response Headers:', JSON.stringify(response._headers, null, 2));
+        let response;
+        try {
+          response = await client.v2.get(endpoint, params);
+          // Try to access raw response if available
+          if (response._request?.res?.headers) {
+            console.log('API Response Headers:', JSON.stringify(response._request.res.headers, null, 2));
+          }
+        } catch (error) {
+          throw error;
+        }
         console.log('API Response:', JSON.stringify(response, null, 2));
         
         if (!response?.data || response.data.length === 0) {

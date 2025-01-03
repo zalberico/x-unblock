@@ -1,7 +1,9 @@
 # x-unblock
 Unblock All Blocked Users on X
 
-There's a bug on X where if you have a lot of historically blocked users, none of them will load in the UI of your profile settings. This makes them impossible to unblock.
+There's a bug on X where if you have a lot of historically blocked users, none of them will load in the UI of your profile settings. This makes them impossible to unblock. 
+
+I thought I might be able to work around this by using the API, but the backend call also fails to return the blocked users. I shared the code anyway in case it's useful - even if it did work as it's supposed to the severe rate limits would make it very slow to complete.
 
 For example - if you have 50k blocked user and none of them show up in the blocked users section of your profile settings, then the only way you can unblock them in the UI is by stumbling on users you've blocked in the replies or links of others.
 
