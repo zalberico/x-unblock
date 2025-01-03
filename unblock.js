@@ -97,6 +97,7 @@ async function unblockAllUsers() {
         
         console.log('Making API request...');
         const response = await client.v2.get(endpoint, params);
+        console.log('API Response Headers:', JSON.stringify(response._headers, null, 2));
         console.log('API Response:', JSON.stringify(response, null, 2));
         
         if (!response?.data || response.data.length === 0) {
