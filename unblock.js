@@ -30,33 +30,6 @@ async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function handleRateLimit(error) {
-  if (error.rateLimit?.reset) {
-    const now = Math.floor(Date.now() / 1000);
-    const waitSeconds = error.rateLimit.reset - now + 1; // Add 1 second buffer
-    if (waitSeconds > 0) {
-      console.log(`Rate limit hit. Waiting ${waitSeconds} seconds until reset...`);
-      await sleep(waitSeconds * 1000);
-      return true;
-    }
-  }
-  return false;
-}
-
-async function makeRequest(requestFn) {
-  try {
-    return await requestFn();
-  } catch (error) {
-    if (error.code === 429) { // Rate limit error
-      if (await handleRateLimit(error)) {
-        // Retry the request after waiting
-        return await requestFn();
-      }
-    }
-    throw error;
-  }
-}
-
 async function loadSavedProgress() {
   try {
     if (await fs.pathExists(SAVE_FILE)) {
@@ -80,17 +53,17 @@ async function loadSavedProgress() {
     console.error('Error loading saved progress:', error);
   }
   return { 
-    processedUsers: {}, // Track which users we've handled
-    paginationToken: null, // Remember where we are in the list
-    lastRequestTime: 0 // Track when we last made a request
+    processedUsers: {}, 
+    paginationToken: null,
+    lastRequestTime: 0 
   };
 }
 
 async function saveProgress(progress) {
+  progress.lastRequestTime = Date.now();
   try {
-    progress.lastRequestTime = Date.now();
     await fs.writeJson(SAVE_FILE, progress);
-    console.log('Progress saved to unblock_progress.json');
+    console.log('Progress saved');
   } catch (error) {
     console.error('Error saving progress:', error);
   }
@@ -98,10 +71,6 @@ async function saveProgress(progress) {
 
 async function unblockAllUsers() {
   try {
-    // Load any saved progress
-    const progress = await loadSavedProgress();
-    let { unblocked, paginationToken, totalProcessed } = progress;
-    
     // First, authenticate
     console.log('\nAuthenticating with X...');
     const me = await client.v2.me();
@@ -111,76 +80,102 @@ async function unblockAllUsers() {
       id: me.data.id
     });
 
-    // X API rate limits: Free=1, Basic=5, Pro=15 requests per 15 mins
-    const BATCH_SIZE = 1;  // Free tier limit
+    // Load saved progress
+    let progress = await loadSavedProgress();
     
     console.log('\n=== PROCESSING BLOCKED USERS ===');
-    console.log('Fetching and unblocking users one at a time...\n');
     
-    do {
-      // Fetch next batch of blocked users
-      console.log('Fetching next blocked user...');
-      
-      const endpoint = `users/${me.data.id}/blocking`;
-      const params = {
-        "max_results": BATCH_SIZE,
-        ...(paginationToken && { "pagination_token": paginationToken })
-      };
-      
-      const response = await makeRequest(() => client.v2.get(endpoint, params));
-      
-      if (response?.data && Array.isArray(response.data)) {
-        // Process each user in the batch (should be just one user on free tier)
-        for (const user of response.data) {
-          console.log('\nFetched user:');
-          console.log('- ID:', user.id);
-          console.log('- Username:', user.username);
-          console.log('- Name:', user.name);
-          
-          if (!progress.processedUsers[user.id]) {
-            try {
-              const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
-              await makeRequest(() => client.v2.delete(unblockEndpoint));
-              progress.processedUsers[user.id] = true;
-              
-              console.log('\nSuccessfully unblocked:');
-              console.log('- ID:', user.id);
-              console.log('- Username:', user.username);
-              console.log('- Name:', user.name);
-              console.log(`Total processed: ${Object.keys(progress.processedUsers).length} users`);
-              
-              // Save progress
-              paginationToken = response?.meta?.next_token;
-              await saveProgress({ unblocked, paginationToken, totalProcessed });
-            } catch (error) {
-              console.error(`Failed to unblock user ${user.username || user.id}:`, error);
-              // Continue with next user even if one fails
+    while (true) { // Continue until we run out of blocked users
+      try {
+        console.log('\nFetching next blocked user...');
+        
+        const endpoint = `users/${me.data.id}/blocking`;
+        const params = {
+          "max_results": 1,
+          ...(progress.paginationToken && { "pagination_token": progress.paginationToken })
+        };
+        
+        console.log('Making API request...');
+        const response = await client.v2.get(endpoint, params);
+        console.log('API Response:', JSON.stringify(response, null, 2));
+        
+        if (!response?.data || response.data.length === 0) {
+          if (response?.meta?.next_token) {
+            console.log('Got empty page but there are more users (next_token present)');
+            progress.paginationToken = response.meta.next_token;
+            await saveProgress(progress);
+            console.log('\nWaiting 15 minutes before next request...');
+            await sleep(15 * 60 * 1000);
+            continue;
+          }
+          console.log('No more blocked users found!');
+          break;
+        }
+
+        const user = response.data[0];
+        console.log('\nFetched user:');
+        console.log('- ID:', user.id);
+        console.log('- Username:', user.username);
+        console.log('- Name:', user.name);
+        
+        if (!progress.processedUsers[user.id]) {
+          try {
+            const unblockEndpoint = `users/${me.data.id}/blocking/${user.id}`;
+            await client.v2.delete(unblockEndpoint);
+            
+            progress.processedUsers[user.id] = true;
+            console.log('\nSuccessfully unblocked:');
+            console.log('- ID:', user.id);
+            console.log('- Username:', user.username);
+            console.log('- Name:', user.name);
+            console.log(`Total processed: ${Object.keys(progress.processedUsers).length} users`);
+            
+            // Save progress after successful unblock
+            progress.paginationToken = response?.meta?.next_token;
+            await saveProgress(progress);
+          } catch (error) {
+            console.error(`Failed to unblock user:`, error);
+            if (error.code === 429) {
+              const resetTime = error.rateLimit?.reset;
+              if (resetTime) {
+                const now = Math.floor(Date.now() / 1000);
+                const waitSeconds = Math.max(resetTime - now + 1, 0);
+                console.log(`Rate limit hit. Waiting ${waitSeconds} seconds...`);
+                await sleep(waitSeconds * 1000);
+                continue;
+              }
             }
+            throw error;
           }
         }
-      }
-      
-      paginationToken = response?.meta?.next_token;
-      
-      // Wait 15 minutes before next request (covers both the fetch and unblock)
-      if (paginationToken) {
-        console.log('\nWaiting 15 minutes before next user (X API rate limit)...\n');
+        
+        // Wait 15 minutes before next request
+        console.log('\nWaiting 15 minutes before next request...');
+        await sleep(15 * 60 * 1000);
+        
+      } catch (error) {
+        console.error('Error during processing:', error);
+        if (error.code === 429) {
+          const resetTime = error.rateLimit?.reset;
+          if (resetTime) {
+            const now = Math.floor(Date.now() / 1000);
+            const waitSeconds = Math.max(resetTime - now + 1, 0);
+            console.log(`Rate limit hit. Waiting ${waitSeconds} seconds...`);
+            await sleep(waitSeconds * 1000);
+            continue;
+          }
+        }
+        // For other errors, wait 15 minutes and try again
+        console.log('Waiting 15 minutes before retrying...');
         await sleep(15 * 60 * 1000);
       }
-      
-    } while (paginationToken);
+    }
     
     console.log('\n=== PROCESS COMPLETE! ===');
-    console.log(`Successfully processed ${totalProcessed} users`);
-    
-    // Clean up save file since we're done
-    await fs.remove(SAVE_FILE);
     
   } catch (error) {
-    console.error('An error occurred:', error);
-    if (error.data) {
-      console.error('Error details:', error.data);
-    }
+    console.error('Fatal error:', error);
+    process.exit(1);
   }
 }
 
@@ -196,4 +191,5 @@ console.log('Progress is saved so you can stop/restart anytime.\n');
 
 unblockAllUsers().catch(error => {
   console.error('Unhandled error:', error);
+  process.exit(1);
 });
